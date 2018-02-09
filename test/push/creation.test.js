@@ -1,6 +1,9 @@
 import {createEntities, createEntries} from '../../lib/push/creation'
 
 import { logEmitter } from '../../lib/utils/logging'
+import getEntityName from '../../lib/utils/get-entity-name'
+
+jest.setTimeout(10000)
 
 jest.mock('../../lib/utils/logging', () => ({
   logEmitter: {
@@ -169,6 +172,72 @@ test('Fails to create locale if it already exists', () => {
   return createEntities({space: space, type: 'Locale'}, [entity], [{sys: {}}])
     .then((entities) => {
       expect(entities[0]).toBe(entity)
+      const logLevels = logEmitter.emit.mock.calls.map((args) => args[0])
+      expect(logLevels.indexOf('error') !== -1).toBeFalsy()
+    })
+})
+
+const FastRateLimit = require('fast-ratelimit').FastRateLimit
+
+const messageLimiter = new FastRateLimit({
+  threshold: 78,
+  ttl: 1
+})
+
+let limitErrorCnt = 0
+
+function rateLimitedRequest (entity) {
+  return messageLimiter.consume('testRateLimit')
+    .then(() => {
+      return entity
+    })
+    .catch(() => {
+      const rateLimitError = new Error('429 - To many requests' + limitErrorCnt)
+      rateLimitError.status = 429
+      rateLimitError.headers = {
+        'x-contentful-ratelimit-reset': 1
+      }
+      limitErrorCnt++
+      throw rateLimitError
+    })
+}
+
+test.only('Create many entities and handle rate limit', () => {
+  const updateStub = jest.fn(rateLimitedRequest)
+  const space = {
+    createAssetWithId: jest.fn((id, entity) => rateLimitedRequest({
+      sys: { id, type: 'Asset' },
+      ...entity,
+      created: true
+    }))
+  }
+  const ENTITY_COUNT = 500
+  const sourceEntities = Array.from(Array(ENTITY_COUNT).keys())
+    .map((i) => ({
+      original: { sys: { id: `${i}` }, original: true },
+      transformed: { sys: { id: `${i}` }, transformed: true }
+    }))
+  const destinationEntities = Array.from(Array(ENTITY_COUNT / 2).keys())
+    .map((i) => ({
+      sys: { id: `${i * 2}` },
+      destination: true,
+      update: () => {
+        return updateStub({
+          sys: { id: `${i * 2}`, type: 'Asset' },
+          updated: true
+        })
+      }
+    }))
+
+  return createEntities(
+    { space: space, type: 'Asset' },
+    sourceEntities,
+    destinationEntities
+  )
+    .then((response) => {
+      console.log({limitErrorCnt})
+      expect(response).toHaveLength(ENTITY_COUNT)
+      expect(logEmitter.emit.mock.calls).toHaveLength(ENTITY_COUNT)
       const logLevels = logEmitter.emit.mock.calls.map((args) => args[0])
       expect(logLevels.indexOf('error') !== -1).toBeFalsy()
     })
