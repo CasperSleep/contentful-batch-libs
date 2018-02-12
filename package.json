@@ -37,6 +37,7 @@
     "listr-verbose-renderer": "^0.4.0",
     "lodash": "^4.0.1",
     "moment": "^2.18.1",
+    "rx-op-lossless-throttle": "^1.0.2",
     "rxjs": "^5.5.6",
     "rxjs-ratelimiter": "^0.1.1"
   },

@@ -1,7 +1,8 @@
+import { FastRateLimit } from 'fast-ratelimit'
+
 import {createEntities, createEntries} from '../../lib/push/creation'
 
 import { logEmitter } from '../../lib/utils/logging'
-import getEntityName from '../../lib/utils/get-entity-name'
 
 jest.setTimeout(10000)
 
@@ -177,32 +178,32 @@ test('Fails to create locale if it already exists', () => {
     })
 })
 
-const FastRateLimit = require('fast-ratelimit').FastRateLimit
+test('Create many entities and handle rate limit', () => {
+  const ENTITY_COUNT = 200
+  const REQUESTS_PER_SECOND = 78
+  const messageLimiter = new FastRateLimit({
+    threshold: REQUESTS_PER_SECOND,
+    ttl: 1
+  })
 
-const messageLimiter = new FastRateLimit({
-  threshold: 78,
-  ttl: 1
-})
+  let limitErrorCnt = 0
 
-let limitErrorCnt = 0
+  function rateLimitedRequest (entity) {
+    return messageLimiter.consume('testRateLimit')
+      .then(() => {
+        return entity
+      })
+      .catch(() => {
+        const rateLimitError = new Error('429 - To many requests' + limitErrorCnt)
+        rateLimitError.status = 429
+        rateLimitError.headers = {
+          'x-contentful-ratelimit-reset': 1
+        }
+        limitErrorCnt++
+        throw rateLimitError
+      })
+  }
 
-function rateLimitedRequest (entity) {
-  return messageLimiter.consume('testRateLimit')
-    .then(() => {
-      return entity
-    })
-    .catch(() => {
-      const rateLimitError = new Error('429 - To many requests' + limitErrorCnt)
-      rateLimitError.status = 429
-      rateLimitError.headers = {
-        'x-contentful-ratelimit-reset': 1
-      }
-      limitErrorCnt++
-      throw rateLimitError
-    })
-}
-
-test.only('Create many entities and handle rate limit', () => {
   const updateStub = jest.fn(rateLimitedRequest)
   const space = {
     createAssetWithId: jest.fn((id, entity) => rateLimitedRequest({
@@ -211,7 +212,6 @@ test.only('Create many entities and handle rate limit', () => {
       created: true
     }))
   }
-  const ENTITY_COUNT = 500
   const sourceEntities = Array.from(Array(ENTITY_COUNT).keys())
     .map((i) => ({
       original: { sys: { id: `${i}` }, original: true },
@@ -235,7 +235,7 @@ test.only('Create many entities and handle rate limit', () => {
     destinationEntities
   )
     .then((response) => {
-      console.log({limitErrorCnt})
+      console.log('Rate limit hits:', limitErrorCnt)
       expect(response).toHaveLength(ENTITY_COUNT)
       expect(logEmitter.emit.mock.calls).toHaveLength(ENTITY_COUNT)
       const logLevels = logEmitter.emit.mock.calls.map((args) => args[0])
